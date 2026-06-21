@@ -56,7 +56,8 @@ def _build_world(guest_view_all_features):
     """Create a workspace/project with an owner, a guest, a 'guest' label, and
     three issues: one owned by the guest, one labelled 'guest' (owned by the
     owner), and one untagged (owned by the owner)."""
-    owner = User.objects.create(email="owner@plane.so")
+    # username is unique on the User model (defaults to ""), so set it explicitly
+    owner = User.objects.create(email="owner@plane.so", username="gv-owner")
     workspace = Workspace.objects.create(name="GV WS", slug="gv-ws", owner=owner)
     WorkspaceMember.objects.create(workspace=workspace, member=owner, role=ROLE_ADMIN)
 
@@ -69,7 +70,7 @@ def _build_world(guest_view_all_features):
     )
     ProjectMember.objects.create(project=project, workspace=workspace, member=owner, role=ROLE_ADMIN)
 
-    guest = User.objects.create(email="guest@plane.so")
+    guest = User.objects.create(email="guest@plane.so", username="gv-guest")
     WorkspaceMember.objects.create(workspace=workspace, member=guest, role=ROLE_GUEST)
     ProjectMember.objects.create(project=project, workspace=workspace, member=guest, role=ROLE_GUEST)
 
