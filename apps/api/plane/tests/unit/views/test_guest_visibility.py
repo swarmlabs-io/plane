@@ -20,6 +20,7 @@ Behaviour matrix:
 from types import SimpleNamespace
 
 import pytest
+from crum import set_current_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -77,10 +78,17 @@ def _build_world(guest_view_all_features):
     # workspace is auto-derived from project by WorkspaceBaseModel.save()
     guest_label = Label.objects.create(name="guest", project=project)
 
-    own_issue = Issue.objects.create(name="Guest's own", project=project, workspace=workspace, created_by=guest)
-    labelled_issue = Issue.objects.create(name="Labelled", project=project, workspace=workspace, created_by=owner)
-    IssueLabel.objects.create(issue=labelled_issue, label=guest_label, project=project)
-    untagged_issue = Issue.objects.create(name="Untagged", project=project, workspace=workspace, created_by=owner)
+    # BaseModel.save() sets created_by from crum.get_current_user(), ignoring a
+    # passed created_by=, so drive ownership via the current-user thread-local.
+    try:
+        set_current_user(guest)
+        own_issue = Issue.objects.create(name="Guest's own", project=project, workspace=workspace)
+        set_current_user(owner)
+        labelled_issue = Issue.objects.create(name="Labelled", project=project, workspace=workspace)
+        IssueLabel.objects.create(issue=labelled_issue, label=guest_label, project=project)
+        untagged_issue = Issue.objects.create(name="Untagged", project=project, workspace=workspace)
+    finally:
+        set_current_user(None)
 
     return SimpleNamespace(
         owner=owner,

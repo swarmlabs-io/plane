@@ -50,6 +50,8 @@ jobs:
       SECRET_KEY: ci-test-secret-key
       DEBUG: "1"
       SKIP_ENV_VAR: "1"
+      WEB_URL: http://localhost
+      APP_BASE_URL: http://localhost
 
     steps:
       - uses: actions/checkout@v4
