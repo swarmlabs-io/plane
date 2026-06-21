@@ -52,7 +52,9 @@ the Actions tab. SSHes to the server, ships `deploy.sh`, which pins the new tag 
   stock `makeplane/plane-backend:v1.3.1` when `SWARM_BACKEND_*` are unset.
 - `plane.env` — `deploy.sh` maintains `SWARM_BACKEND_IMAGE` / `SWARM_BACKEND_TAG`.
 
-The GHCR backend package is **public**, so the server pulls it without auth.
+The GHCR backend package stays **private**. During each gated deploy the workflow
+logs the server into GHCR with its own short-lived `GITHUB_TOKEN`, pulls, then logs
+out — so no long-lived registry credential is stored on the box.
 
 ## Required GitHub config
 

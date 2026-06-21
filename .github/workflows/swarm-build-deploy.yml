@@ -82,7 +82,13 @@ jobs:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           TAG: ${{ needs.build.outputs.tag }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           scp -i ~/.ssh/id_ed25519 deploy/swarm/deploy.sh "$SSH_USER@$SSH_HOST:/opt/plane-selfhost/plane-app/deploy.sh"
+          # Authenticate the server to GHCR with this job's short-lived token (package stays private),
+          # deploy, then log out — no long-lived registry credential is stored on the box.
           ssh -i ~/.ssh/id_ed25519 "$SSH_USER@$SSH_HOST" \
-            "chmod +x /opt/plane-selfhost/plane-app/deploy.sh && /opt/plane-selfhost/plane-app/deploy.sh '$TAG'"
+            "echo '$GHCR_TOKEN' | docker login ghcr.io -u '$GHCR_USER' --password-stdin && \
+             chmod +x /opt/plane-selfhost/plane-app/deploy.sh && \
+             /opt/plane-selfhost/plane-app/deploy.sh '$TAG'; rc=\$?; docker logout ghcr.io >/dev/null 2>&1; exit \$rc"
