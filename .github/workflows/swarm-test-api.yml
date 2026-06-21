@@ -1,0 +1,69 @@
+name: Swarm API Tests
+
+# Runs the guest-visibility regression suite (the swarmlabs fork's custom tests)
+# against real Postgres + Redis. Gates PRs into swarm-prod so an upstream rebase
+# can never silently break the fork behaviour.
+
+on:
+  pull_request:
+    branches: [swarm-prod]
+    paths:
+      - "apps/api/**"
+      - ".github/workflows/swarm-test-api.yml"
+  push:
+    branches: [swarm-prod]
+    paths:
+      - "apps/api/**"
+  workflow_dispatch:
+
+concurrency:
+  group: swarm-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guest-visibility:
+    name: Guest-visibility tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: postgres:15.7-alpine
+        env:
+          POSTGRES_USER: plane
+          POSTGRES_PASSWORD: plane
+          POSTGRES_DB: plane
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U plane"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://plane:plane@localhost:5432/plane
+      REDIS_URL: redis://localhost:6379/0
+      SECRET_KEY: ci-test-secret-key
+      DEBUG: "1"
+      SKIP_ENV_VAR: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12.x"
+          cache: pip
+          cache-dependency-path: |
+            apps/api/requirements.txt
+            apps/api/requirements/test.txt
+
+      - name: Install dependencies
+        run: cd apps/api && pip install -r requirements.txt -r requirements/test.txt
+
+      - name: Run guest-visibility tests
+        run: cd apps/api && python -m pytest plane/tests/unit/views/test_guest_visibility.py
