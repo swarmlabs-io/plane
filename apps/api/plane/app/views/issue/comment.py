@@ -7,7 +7,7 @@ import json
 
 # Django imports
 from django.utils import timezone
-from django.db.models import Exists
+from django.db.models import Exists, Q
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import IntegrityError
 
@@ -33,7 +33,7 @@ class IssueCommentViewSet(BaseViewSet):
     filterset_fields = ["issue__id", "workspace__id"]
 
     def get_queryset(self):
-        return self.filter_queryset(
+        queryset = (
             super()
             .get_queryset()
             .filter(workspace__slug=self.kwargs.get("slug"))
@@ -59,6 +59,22 @@ class IssueCommentViewSet(BaseViewSet):
             )
             .distinct()
         )
+        # GUEST-VISIBILITY FORK: this listing had no guest guard — guests may only
+        # see comments on issues they can see (their own, or labelled "guest").
+        is_guest = ProjectMember.objects.filter(
+            workspace__slug=self.kwargs.get("slug"),
+            project_id=self.kwargs.get("project_id"),
+            member=self.request.user,
+            role=5,
+            is_active=True,
+        ).exists()
+        if is_guest:
+            project = Project.objects.get(pk=self.kwargs.get("project_id"))
+            if not project.guest_view_all_features:
+                queryset = queryset.filter(
+                    Q(issue__created_by=self.request.user) | Q(issue__labels__name="guest")
+                ).distinct()
+        return self.filter_queryset(queryset)
 
     @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST])
     def create(self, request, slug, project_id, issue_id):
@@ -74,6 +90,8 @@ class IssueCommentViewSet(BaseViewSet):
             ).exists()
             and not project.guest_view_all_features
             and not issue.created_by == request.user
+            # GUEST-VISIBILITY FORK: allow commenting if the issue is labelled "guest"
+            and not issue.labels.filter(name="guest").exists()
         ):
             return Response(
                 {"error": "You are not allowed to comment on the issue"},
