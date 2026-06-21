@@ -100,6 +100,24 @@ class IssueListEndpoint(BaseAPIView):
         filters = issue_filters(request.query_params, "GET")
         issue_queryset = queryset.filter(**filters)
 
+        # GUEST-VISIBILITY FORK: this endpoint had no guest guard — restrict guests
+        # to their own issues plus any issue labelled "guest". Applied to both
+        # querysets since either may be serialized below.
+        project = Project.objects.get(pk=project_id, workspace__slug=slug)
+        if (
+            ProjectMember.objects.filter(
+                workspace__slug=slug,
+                project_id=project_id,
+                member=request.user,
+                role=5,
+                is_active=True,
+            ).exists()
+            and not project.guest_view_all_features
+        ):
+            guest_visibility = Q(created_by=request.user) | Q(labels__name="guest")
+            queryset = queryset.filter(guest_visibility).distinct()
+            issue_queryset = issue_queryset.filter(guest_visibility).distinct()
+
         # Add select_related, prefetch_related if fields or expand is not None
         if self.fields or self.expand:
             issue_queryset = issue_queryset.select_related("workspace", "project", "state", "parent").prefetch_related(
@@ -304,8 +322,11 @@ class IssueViewSet(BaseViewSet):
             ).exists()
             and not project.guest_view_all_features
         ):
-            issue_queryset = issue_queryset.filter(created_by=request.user)
-            filtered_issue_queryset = filtered_issue_queryset.filter(created_by=request.user)
+            # GUEST-VISIBILITY FORK: guests see their own issues plus any issue
+            # labelled "guest" (previously: own issues only)
+            guest_visibility = Q(created_by=request.user) | Q(labels__name="guest")
+            issue_queryset = issue_queryset.filter(guest_visibility).distinct()
+            filtered_issue_queryset = filtered_issue_queryset.filter(guest_visibility).distinct()
 
         if group_by:
             if sub_group_by:
@@ -594,6 +615,8 @@ class IssueViewSet(BaseViewSet):
             ).exists()
             and not project.guest_view_all_features
             and not issue.created_by == request.user
+            # GUEST-VISIBILITY FORK: allow if the issue carries the "guest" label
+            and not issue.labels.filter(name="guest").exists()
         ):
             return Response(
                 {"error": "You are not allowed to view this issue"},
@@ -903,8 +926,10 @@ class IssuePaginatedViewSet(BaseViewSet):
             is_active=True,
         )
         if project_member.exists() and not project.guest_view_all_features:
-            base_queryset = base_queryset.filter(created_by=request.user)
-            queryset = queryset.filter(created_by=request.user)
+            # GUEST-VISIBILITY FORK: guests also see issues labelled "guest"
+            guest_visibility = Q(created_by=request.user) | Q(labels__name="guest")
+            base_queryset = base_queryset.filter(guest_visibility).distinct()
+            queryset = queryset.filter(guest_visibility).distinct()
 
         # filtering issues by greater then updated_at given by the user
         if updated_at:
@@ -1037,6 +1062,14 @@ class IssueDetailEndpoint(BaseAPIView):
                     project__project_projectmember__role=ROLE.GUEST.value,
                     project__guest_view_all_features=False,
                     created_by=self.request.user,
+                )
+                # GUEST-VISIBILITY FORK: guests also see issues labelled "guest"
+                | Q(
+                    project__project_projectmember__member=self.request.user,
+                    project__project_projectmember__is_active=True,
+                    project__project_projectmember__role=ROLE.GUEST.value,
+                    project__guest_view_all_features=False,
+                    labels__name="guest",
                 )
             )
             .values("id")
@@ -1335,6 +1368,8 @@ class IssueDetailIdentifierEndpoint(BaseAPIView):
             ).exists()
             and not project.guest_view_all_features
             and not issue.created_by == request.user
+            # GUEST-VISIBILITY FORK: allow if the issue carries the "guest" label
+            and not issue.labels.filter(name="guest").exists()
         ):
             return Response(
                 {"error": "You are not allowed to view this issue"},
