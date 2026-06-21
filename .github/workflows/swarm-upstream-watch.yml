@@ -1,0 +1,102 @@
+name: Swarm Upstream Watch
+
+# Weekly check for new upstream Plane releases. On a new stable tag it:
+#   1. fast-forwards `main` to that tag (clean mirror, force-updated),
+#   2. rebases `swarm-prod` (our custom commits) onto it on a temp branch,
+#   3. opens a PR if the rebase is clean, or pings Slack if it conflicts.
+# It NEVER merges itself — upstream upgrades are reviewed by a human, who then
+# merges the PR, which triggers swarm-build-deploy.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: swarm-prod
+          fetch-depth: 0
+
+      - name: Configure git + upstream
+        run: |
+          git config user.name "swarm-bot"
+          git config user.email "bot@swarmlabs.io"
+          git remote add upstream https://github.com/makeplane/plane.git || true
+          git fetch upstream --tags --quiet
+          git fetch origin main swarm-prod --quiet
+
+      - id: detect
+        name: Detect newest stable upstream tag
+        run: |
+          LATEST=$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          CURRENT=$(git describe --tags --abbrev=0 origin/main 2>/dev/null || echo none)
+          echo "latest=$LATEST"   >> "$GITHUB_OUTPUT"
+          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
+          if [ "$LATEST" = "$CURRENT" ]; then
+            echo "uptodate=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "uptodate=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Latest upstream: $LATEST | current main: $CURRENT"
+
+      - id: rebase
+        name: Fast-forward main + rebase swarm-prod
+        if: steps.detect.outputs.uptodate == 'false'
+        run: |
+          set +e
+          LATEST=${{ steps.detect.outputs.latest }}
+          git branch -f main "$LATEST"
+          git push origin main --force-with-lease
+          git checkout -B "upgrade/$LATEST" origin/swarm-prod
+          git rebase main
+          if [ $? -ne 0 ]; then
+            git rebase --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # sanity: fork markers must survive the rebase
+          HITS=$(grep -rl "GUEST-VISIBILITY FORK" apps/api/ 2>/dev/null | wc -l || echo 0)
+          echo "marker_files=$HITS" >> "$GITHUB_OUTPUT"
+          git push origin "upgrade/$LATEST" --force-with-lease
+          echo "conflict=false" >> "$GITHUB_OUTPUT"
+
+      - name: Open upgrade PR (clean rebase)
+        if: steps.detect.outputs.uptodate == 'false' && steps.rebase.outputs.conflict == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LATEST=${{ steps.detect.outputs.latest }}
+          gh pr create --base swarm-prod --head "upgrade/$LATEST" \
+            --title "Upgrade to Plane $LATEST" \
+            --body "Automated upstream upgrade — \`swarm-prod\` rebased onto \`$LATEST\` cleanly.
+
+          **Before merging:**
+          - [ ] \`grep -rl 'GUEST-VISIBILITY FORK' apps/api/\` — custom markers present (found ${{ steps.rebase.outputs.marker_files }} file(s))
+          - [ ] Custom regression tests pass
+          - [ ] Frontend image tag bumped to \`$LATEST\` on the server if needed
+
+          Merging this PR triggers the backend build + gated deploy." \
+            || echo "PR may already exist."
+
+      - name: Notify Slack
+        if: always() && steps.detect.outputs.uptodate == 'false'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          [ -z "$SLACK_WEBHOOK_URL" ] && { echo "No SLACK_WEBHOOK_URL set, skipping."; exit 0; }
+          LATEST=${{ steps.detect.outputs.latest }}
+          if [ "${{ steps.rebase.outputs.conflict }}" = "true" ]; then
+            MSG=":warning: Plane *$LATEST* released — rebase of \`swarm-prod\` CONFLICTS. Manual rebase needed."
+          else
+            MSG=":arrow_up: Plane *$LATEST* released — \`swarm-prod\` rebased cleanly, PR opened for review."
+          fi
+          curl -fsS -X POST -H 'Content-type: application/json' \
+            --data "{\"text\":\"$MSG\"}" "$SLACK_WEBHOOK_URL" || true

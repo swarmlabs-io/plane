@@ -1,0 +1,21 @@
+# Reference copy of the backend-image override applied on the live server.
+# On the server this content is MERGED into the existing
+# /opt/plane-selfhost/plane-app/docker-compose.override.yaml (which also carries
+# the Caddy/TLS proxy override). Compose deep-merges by service name.
+#
+# Behaviour: when SWARM_BACKEND_* are unset in plane.env, the image falls back to
+# the stock makeplane/plane-backend:v1.3.1 — i.e. identical to upstream. deploy.sh
+# sets SWARM_BACKEND_IMAGE / SWARM_BACKEND_TAG to point at our GHCR build.
+services:
+  api:
+    image: ${SWARM_BACKEND_IMAGE:-makeplane/plane-backend}:${SWARM_BACKEND_TAG:-v1.3.1}
+    pull_policy: always
+  worker:
+    image: ${SWARM_BACKEND_IMAGE:-makeplane/plane-backend}:${SWARM_BACKEND_TAG:-v1.3.1}
+    pull_policy: always
+  beat-worker:
+    image: ${SWARM_BACKEND_IMAGE:-makeplane/plane-backend}:${SWARM_BACKEND_TAG:-v1.3.1}
+    pull_policy: always
+  migrator:
+    image: ${SWARM_BACKEND_IMAGE:-makeplane/plane-backend}:${SWARM_BACKEND_TAG:-v1.3.1}
+    pull_policy: always
