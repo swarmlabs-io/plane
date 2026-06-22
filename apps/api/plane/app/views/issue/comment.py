@@ -7,7 +7,7 @@ import json
 
 # Django imports
 from django.utils import timezone
-from django.db.models import Exists
+from django.db.models import Exists, Q
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import IntegrityError
 
@@ -33,7 +33,7 @@ class IssueCommentViewSet(BaseViewSet):
     filterset_fields = ["issue__id", "workspace__id"]
 
     def get_queryset(self):
-        return self.filter_queryset(
+        qs = self.filter_queryset(
             super()
             .get_queryset()
             .filter(workspace__slug=self.kwargs.get("slug"))
@@ -59,6 +59,20 @@ class IssueCommentViewSet(BaseViewSet):
             )
             .distinct()
         )
+        # GUEST-VISIBILITY FORK — guest guard on comment listing (missing in upstream)
+        if (
+            ProjectMember.objects.filter(
+                workspace__slug=self.kwargs.get("slug"),
+                project_id=self.kwargs.get("project_id"),
+                member=self.request.user,
+                role=5,
+                is_active=True,
+            ).exists()
+        ):
+            project = Project.objects.get(pk=self.kwargs.get("project_id"))
+            if not project.guest_view_all_features:
+                qs = qs.filter(Q(issue__created_by=self.request.user) | Q(issue__labels__name="guest")).distinct()
+        return qs
 
     @allow_permission([ROLE.ADMIN, ROLE.MEMBER, ROLE.GUEST])
     def create(self, request, slug, project_id, issue_id):
@@ -73,7 +87,8 @@ class IssueCommentViewSet(BaseViewSet):
                 is_active=True,
             ).exists()
             and not project.guest_view_all_features
-            and not issue.created_by == request.user
+            # GUEST-VISIBILITY FORK — allow if created by guest OR has guest label
+            and not (issue.created_by == request.user or issue.labels.filter(name="guest").exists())
         ):
             return Response(
                 {"error": "You are not allowed to comment on the issue"},
